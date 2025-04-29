@@ -33,3 +33,34 @@ def opencv_process_image(data):
     byte_im = im_buf_arr.tobytes()
      # 返回处理后的图像数据
     return byte_im
+
+def process_image(input_bytes: bytes) -> bytes:
+    img = cv2.imdecode(np.frombuffer(input_bytes, np.uint8), cv2.IMREAD_COLOR)
+
+    # ======= 影像處理範例：Canny 邊緣 =======
+    gray  = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 80, 160)
+    out   = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+    # ========================================
+
+    ok, buf = cv2.imencode(".png", out)
+    if not ok:
+        raise RuntimeError("encode failed")
+    return buf.tobytes()
+
+
+def process_nv21(nv21_bytes: bytes, w: int, h: int) -> bytes:
+     # NV21 → YUV420 → BGR
+     yuv   = np.frombuffer(nv21_bytes, dtype=np.uint8).reshape((h * 3 // 2, w))
+     bgr   = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV21)
+
+     # ======= 影像處理，示範 Canny =========
+     gray  = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+     edge  = cv2.Canny(gray, 80, 160)
+     out   = cv2.cvtColor(edge, cv2.COLOR_GRAY2BGR)
+     # ======================================
+
+     ok, buf = cv2.imencode(".png", out)
+     if not ok:
+         raise RuntimeError("encode failed")
+     return buf.tobytes()
