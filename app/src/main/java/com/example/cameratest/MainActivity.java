@@ -35,6 +35,9 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.camera.core.ImageProxy;
 import androidx.camera.core.ImageCaptureException;
 import androidx.annotation.NonNull;
+import androidx.camera.core.ImageAnalysis;      // ★ 新增
+import androidx.camera.core.ImageProxy;
+
 
 // --- 影像格式轉換 ---
 import android.graphics.ImageFormat;
@@ -59,6 +62,7 @@ public class MainActivity extends AppCompatActivity {
     private PreviewView previewView;
     private ImageView  resultView;
     private ImageCapture imageCapture;
+    private ImageAnalysis imageAnalysis;
     private ExecutorService cameraExecutor;
 
     private Python py;
@@ -211,7 +215,9 @@ public class MainActivity extends AppCompatActivity {
                 Preview preview = new Preview.Builder().build();
                 preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
+                /*
                 imageCapture = new ImageCapture.Builder()
+
                         .setBufferFormat(ImageFormat.YUV_420_888)   // ★ 需要 CameraX 1.3+
                         .setTargetResolution(new Size(640, 480))          // ← 新增
                         .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
@@ -222,6 +228,24 @@ public class MainActivity extends AppCompatActivity {
                 cameraProvider.unbindAll();
                 cameraProvider.bindToLifecycle(
                         this, selector, preview, imageCapture);
+
+                 */
+                // ★ 新的即時分析 Use-case
+                imageAnalysis = new ImageAnalysis.Builder()
+                        .setTargetResolution(new Size(640, 480))              // 解析度決定速度
+                        .setBackpressureStrategy(
+                                ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)      // 只保留最新影格
+                        .setOutputImageFormat(
+                                ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+                        .build();
+
+                // ★ 指定 Analyzer
+                imageAnalysis.setAnalyzer(cameraExecutor, new EdgeAnalyzer());
+
+                CameraSelector selector = CameraSelector.DEFAULT_BACK_CAMERA;
+                cameraProvider.unbindAll();
+                cameraProvider.bindToLifecycle(
+                        this, selector, preview, imageAnalysis);
 
             } catch (Exception e) {
                 Log.e("CameraX", "Failed to bind camera", e);
@@ -345,7 +369,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /** 正確處理 rowStride / pixelStride，把 YUV_420_888 轉成 NV21 */
-    private static byte[] imageProxyToNv21(ImageProxy image) {
+    public static byte[] imageProxyToNv21(ImageProxy image) {
         int w = image.getWidth();
         int h = image.getHeight();
 
@@ -432,4 +456,40 @@ public class MainActivity extends AppCompatActivity {
                 Math.round(w * scale), Math.round(h * scale), true);
     }
 
+
+    private class EdgeAnalyzer implements ImageAnalysis.Analyzer {
+
+        @Override
+        public void analyze(@NonNull ImageProxy image) {
+            // 1) 取 Y (灰階) → ByteArray
+            byte[] nv21 = imageProxyToNv21(image);
+            int width  = image.getWidth();
+            int height = image.getHeight();
+            image.close();
+
+            // 2) 丟給 Python 做 Canny
+            byte[] pngEdge;
+            try {
+                PyObject func = py.getModule("Hello").get("process_nv21"); // ★ 你在 Python 寫的函式
+                PyObject result = func.call(nv21, width, height);
+                byte[] outPng = result.toJava(byte[].class);
+                // 3) UI Thread 顯示
+
+                Bitmap outBmp = BitmapFactory.decodeByteArray(outPng, 0, outPng.length);
+                runOnUiThread(() -> {
+                    resultView.setImageBitmap(outBmp);
+                    resultView.setVisibility(View.VISIBLE);
+                    resultView.bringToFront();
+                    resultView.setRotation(90f);       // 視需要旋轉
+                });
+
+            } catch (Exception e) {
+                Log.e("PY", "python error", e);
+                return;
+            }
+        }
+    }
+
 }
+
+
