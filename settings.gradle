@@ -20,5 +20,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "CameraTest"
+rootProject.name = "GestureTest"
 include ':app'

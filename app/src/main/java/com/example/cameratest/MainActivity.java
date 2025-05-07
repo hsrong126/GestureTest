@@ -470,7 +470,7 @@ public class MainActivity extends AppCompatActivity {
             // 2) 丟給 Python 做 Canny
             byte[] pngEdge;
             try {
-                PyObject func = py.getModule("Hello").get("process_nv21"); // ★ 你在 Python 寫的函式
+                PyObject func = py.getModule("Hello").get("detect_gesture"); // ★ 你在 Python 寫的函式
                 PyObject result = func.call(nv21, width, height);
                 byte[] outPng = result.toJava(byte[].class);
                 // 3) UI Thread 顯示

@@ -8,8 +8,8 @@ android {
     compileSdk 35
 
     defaultConfig {
-        applicationId "com.example.cameratest"
-        minSdk 24
+        applicationId "com.example.gesturetest"
+        minSdk 21
         targetSdk 35
         versionCode 1
         versionName "1.0"
@@ -17,11 +17,11 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
-            abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+            abiFilters "arm64-v8a", "x86", "x86_64"
         }
 
         python {
-            buildPython "C:/Users/jaja/AppData/Local/Programs/Python/Python313/python.exe"
+            buildPython "C:/Users/ESOC/AppData/Local/Programs/Python/Python38-32/python.exe"
             pip{
                 install "numpy"
                 install "opencv-python"
