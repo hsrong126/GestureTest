@@ -2,6 +2,7 @@ package com.example.cameratest;
 
 import android.Manifest;                     // ← 加這行
 
+import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -14,6 +15,10 @@ import android.widget.Button;
 import android.widget.ImageView;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -86,7 +91,20 @@ public class MainActivity extends AppCompatActivity {
         if (!Python.isStarted()) {
             Python.start(new AndroidPlatform(this));
         }
+        String modelPath = "";
+        try {
+            /* Are you using old TFLite binary with newer model?Registration failed. 版本問題
+            File modelFile = copyAssetToFile("foo.tflite", getApplicationContext());
+            */
+            File modelFile = copyAssetToFile("rps_mobilenetv2.tflite", getApplicationContext());
+            modelPath = modelFile.getAbsolutePath();
+        } catch (IOException e) {
+            Log.e("Model", "Failed to copy model file", e);
+        }
+
         py = Python.getInstance();
+        PyObject pyModule = py.getModule("Hello");  // 對應你的 gesture_task.py
+        pyModule.callAttr("load_model", modelPath);
 
         setContentView(R.layout.activity_main);
 
@@ -470,7 +488,7 @@ public class MainActivity extends AppCompatActivity {
             // 2) 丟給 Python 做 Canny
             byte[] pngEdge;
             try {
-                PyObject func = py.getModule("Hello").get("detect_gesture"); // ★ 你在 Python 寫的函式
+                PyObject func = py.getModule("Hello").get("gesture_nv21"); // ★ 你在 Python 寫的函式
                 PyObject result = func.call(nv21, width, height);
                 byte[] outPng = result.toJava(byte[].class);
                 // 3) UI Thread 顯示
@@ -488,6 +506,23 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
         }
+    }
+
+
+    public File copyAssetToFile(String assetName, Context context) throws IOException {
+        File outFile = new File(context.getFilesDir(), assetName);
+        if (!outFile.exists()) {
+            InputStream is = context.getAssets().open(assetName);
+            FileOutputStream os = new FileOutputStream(outFile);
+            byte[] buffer = new byte[1024];
+            int length;
+            while ((length = is.read(buffer)) > 0) {
+                os.write(buffer, 0, length);
+            }
+            is.close();
+            os.close();
+        }
+        return outFile;
     }
 
 }

@@ -1,5 +1,8 @@
 import numpy as np
 import cv2
+import math
+import tflite_runtime.interpreter as tflite
+from pathlib import Path
 
 def Python_say_Hello():
     print("Hello Python")
@@ -172,6 +175,76 @@ def detect_gesture(nv21_bytes: bytes, w: int, h: int) -> bytes:
 
     img = cv2.rotate(rotated_img, cv2.ROTATE_90_COUNTERCLOCKWISE)
     # ======================================
+
+    ok, buf = cv2.imencode(".png", img)
+    if not ok:
+        raise RuntimeError("encode failed")
+    return buf.tobytes()
+
+
+# ---------- 0. TFLite Interpreter (MobileNetV2 96×96×3) ----------
+INTER = None
+IN_IDX = OUT_IDX = None
+INPUT_SIZE = 96
+LABELS = ["Rock", "Scissors", "Paper"]
+
+def load_model(model_path):
+    global INTER, IN_IDX, OUT_IDX
+    INTER = tflite.Interpreter(model_path=model_path)
+    INTER.allocate_tensors()
+    IN_IDX = INTER.get_input_details()[0]["index"]
+    OUT_IDX = INTER.get_output_details()[0]["index"]
+    print("✅ TFLite model loaded from:", model_path)
+
+# ---------- 1. 皮膚遮罩與輪廓 ----------
+def detect_skin(image):
+    ycrcb = cv2.cvtColor(image, cv2.COLOR_BGR2YCrCb)
+    skin_mask = cv2.inRange(
+        ycrcb,
+        np.array([0, 133, 77], np.uint8),
+        np.array([255,173,127], np.uint8)
+    )
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
+    skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel)
+    skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_CLOSE, kernel)
+    return skin_mask
+
+def largest_contour(mask):
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return max(cnts, key=cv2.contourArea) if cnts else None
+
+# ---------- 2. TFLite 推論 ----------
+def predict_gesture(roi_bgr):
+    roi_rgb = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2RGB)
+    roi_rgb = cv2.resize(roi_rgb, (INPUT_SIZE, INPUT_SIZE))
+    inp = np.expand_dims(roi_rgb/255.0, 0).astype(np.float32)
+    INTER.set_tensor(IN_IDX, inp)
+    INTER.invoke()
+    probs = INTER.get_tensor(OUT_IDX)[0]
+    return LABELS[int(probs.argmax())]
+
+# ---------- 3. 對 NV21 影格做整體流程 ----------
+def gesture_nv21(nv21_bytes: bytes, width: int, height: int):
+    yuv = np.frombuffer(nv21_bytes, np.uint8).reshape((height*3//2, width))
+    bgr = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV21)
+    skin = detect_skin(bgr)
+    contour = largest_contour(skin)
+    if contour is None:
+        return "No hand detected"
+    x,y,w,h = cv2.boundingRect(contour)
+    roi = bgr[y:y+h, x:x+w] # 手部 ROI
+    if roi.size == 0:
+        return "No hand detected"
+    result_gesture = predict_gesture(roi)
+    # print(result_gesture)
+
+    # 旋轉影像（向右旋轉 90 度）
+    rotated_img = cv2.rotate(bgr, cv2.ROTATE_90_CLOCKWISE)
+    # 在旋轉後的影像上繪製水平文字
+    # 旋轉後尺寸為 (w, h)，文字放在左上角 (10, 50)
+    cv2.putText(rotated_img, f"Gesture: {result_gesture}", (50, 70),
+                cv2.FONT_HERSHEY_SIMPLEX, 2, (127, 255, 255), 2)
+    img = cv2.rotate(rotated_img, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
     ok, buf = cv2.imencode(".png", img)
     if not ok:

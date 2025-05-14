@@ -25,6 +25,7 @@ android {
             pip{
                 install "numpy"
                 install "opencv-python"
+                install "tflite-runtime"
             }
         }
     }
