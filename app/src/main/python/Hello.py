@@ -1,30 +1,6 @@
-import numpy as np
 import cv2
 import math
-import tflite_runtime.interpreter as tflite
-from pathlib import Path
-
-def Python_say_Hello():
-    print("Hello Python")
-
-
-#使用numpy计算两个矩阵的乘积
-def matrix_multiply():
-    a = np.array([[1, 2], [3, 4]])
-    b = np.array([[5, 6], [7, 8]])
-    c = np.matmul(a, b)
-    return c
-
-#使用numpy生成随机数组，并计算其平均值和标准差。
-def numpy_example():
-    # Generate a random array with shape (3, 3)
-    a = np.random.rand(3, 3)
-    # Calculate the mean of the array
-    mean = np.mean(a)
-    # Calculate the standard deviation of the array
-    std = np.std(a)
-    return mean, std
-
+import numpy as np
 
 def opencv_process_image(data):
     # 读取图片数据
@@ -51,7 +27,6 @@ def process_image(input_bytes: bytes) -> bytes:
         raise RuntimeError("encode failed")
     return buf.tobytes()
 
-
 def process_nv21(nv21_bytes: bytes, w: int, h: int) -> bytes:
      # NV21 → YUV420 → BGR
      yuv   = np.frombuffer(nv21_bytes, dtype=np.uint8).reshape((h * 3 // 2, w))
@@ -69,184 +44,81 @@ def process_nv21(nv21_bytes: bytes, w: int, h: int) -> bytes:
      return buf.tobytes()
 
 
-# Rock, scissors, paper
-def detect_gesture(nv21_bytes: bytes, w: int, h: int) -> bytes:
-    # NV21 → YUV420
-    # 讀取圖片
-    yuv  = np.frombuffer(nv21_bytes, dtype=np.uint8).reshape((h * 3 // 2, w))
-    img   = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV21)
 
-    # ============= 影像處理 ==============
-    gesture = "Unknown"
-    if img is None:
-        print(f"無法載入圖片: {image_path}")
-        ok, buf = cv2.imencode(".png", img)
-        if not ok:
-            raise RuntimeError("encode failed")
-        return buf.tobytes()
+# 全局變數，儲存模型
+faceNet = None
+ageNet = None
+genderNet = None
 
-    # 設定 ROI
-    top_left = (100, 100) # Android 向右旋轉 90 度，因此是右上座標
-    bottom_right = (w-100, h-100) # Android 向右旋轉 90 度，因此是左下座標
+def load_model(face_proto_path, face_model_path, age_proto_path, age_model_path, gender_proto_path, gender_model_path):
+    global faceNet, ageNet, genderNet
+    try:
+        # 初始化模型
+        faceNet = cv2.dnn.readNet(face_model_path, face_proto_path)
+        ageNet = cv2.dnn.readNet(age_model_path, age_proto_path)
+        genderNet = cv2.dnn.readNet(gender_model_path, gender_proto_path)
 
-    # 提取 ROI 座標
-    x1, y1 = top_left
-    x2, y2 = bottom_right
+        # 檢查模型是否成功載入
+        if faceNet is None or ageNet is None or genderNet is None:
+            raise RuntimeError("Failed to load one or more models")
 
-    # 檢查 ROI 座標是否有效
-    if x1 < 0 or y1 < 0 or x2 > img.shape[1] or y2 > img.shape[0] or x1 >= x2 or y1 >= y2:
-        print(f"無效的 ROI 座標: top_left={top_left}, bottom_right={bottom_right}")
-        ok, buf = cv2.imencode(".png", img)
-        if not ok:
-            raise RuntimeError("encode failed")
-        return buf.tobytes()
+        print(f"✅ Model load successful")
+        return True
+    except Exception as e:
+        print(f"❌ Model loading failed: {str(e)}")
+        return False
 
-    # 定義 ROI
-    roi = img[y1:y2, x1:x2]
+def highlightFace(net, frame, conf_threshold=0.7):
+    frameOpencvDnn = frame.copy()
+    frameHeight, frameWidth = frameOpencvDnn.shape[:2]
+    blob = cv2.dnn.blobFromImage(frameOpencvDnn, 1.0, (300, 300), [104, 117, 123], True, False)
+    net.setInput(blob)
+    detections = net.forward()
+    faceBoxes = []
+    for i in range(detections.shape[2]):
+        confidence = detections[0, 0, i, 2]
+        if confidence > conf_threshold:
+            x1 = int(detections[0, 0, i, 3] * frameWidth)
+            y1 = int(detections[0, 0, i, 4] * frameHeight)
+            x2 = int(detections[0, 0, i, 5] * frameWidth)
+            y2 = int(detections[0, 0, i, 6] * frameHeight)
+            faceBoxes.append([x1, y1, x2, y2])
+            cv2.rectangle(frameOpencvDnn, (x1, y1), (x2, y2), (0, 255, 0), int(round(frameHeight / 150)), 8)
+    return frameOpencvDnn, faceBoxes
 
-    # 繪製 ROI 矩形
-    cv2.rectangle(img, top_left, bottom_right, (0, 255, 0), 2)
+def process_nv21_for_age_gender(nv21_bytes: bytes, w: int, h: int) -> bytes:
+    # 檢查模型是否已載入
+    if faceNet is None or ageNet is None or genderNet is None:
+        raise RuntimeError("Models not loaded. Call load_model() first.")
 
-    # 轉換為 HSV 色彩空間
-    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    # 將 NV21 數據轉為 NumPy 陣列，並使用 w 和 h 重新塑造
+    nv21 = np.frombuffer(nv21_bytes, dtype=np.uint8)
+    frame = cv2.cvtColor(nv21.reshape((h, w)), cv2.COLOR_YUV2BGR_NV21)
+    # 0：水平翻轉（沿著垂直軸翻轉）。 1：垂直翻轉（沿著水平軸翻轉）。 -1：同時在水平和垂直方向上翻轉。
+    frame = cv2.flip(frame, 1)
 
-    # 定義膚色範圍（可根據實際環境調整）
-    lower_skin = np.array([0, 20, 70], dtype=np.uint8)
-    upper_skin = np.array([20, 255, 255], dtype=np.uint8)
-    mask = cv2.inRange(hsv, lower_skin, upper_skin)
+    # 人臉檢測
+    MODEL_MEAN_VALUES = (78.4263377603, 87.7689143744, 114.895847746)
+    ageList = ['(0-2)', '(4-6)', '(8-12)', '(15-20)', '(25-32)', '(38-43)', '(48-53)', '(60-100)']
+    genderList = ['Male', 'Female']
 
-    # 形態學處理（去除噪點）
-    mask = cv2.GaussianBlur(mask, (5, 5), 0)
-    mask = cv2.dilate(mask, None, iterations=2)
-    mask = cv2.erode(mask, None, iterations=2)
+    blob = cv2.dnn.blobFromImage(frame, 1.0, (227, 227), MODEL_MEAN_VALUES, swapRB=False)
 
-    # 尋找輪廓
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    genderNet.setInput(blob)
+    genderPreds = genderNet.forward()
+    gender = genderList[genderPreds[0].argmax()]
 
-    if contours:
-        # 找到最大輪廓（假設為手）
-        max_contour = max(contours, key=cv2.contourArea)
-        if cv2.contourArea(max_contour) > 1000:  # 過濾小雜訊
-            # 計算凸包
-            hull = cv2.convexHull(max_contour, returnPoints=False)
-            defects = cv2.convexityDefects(max_contour, hull)
+    ageNet.setInput(blob)
+    agePreds = ageNet.forward()
+    age = ageList[agePreds[0].argmax()]
 
-            # 計數缺陷數量
-            defect_count = 0
-            if defects is not None:
-                for i in range(defects.shape[0]):
-                    s, e, f, d = defects[i, 0]
-                    start = tuple(max_contour[s][0])
-                    end = tuple(max_contour[e][0])
-                    far = tuple(max_contour[f][0])
+    # 旋轉影像（如果需要）並增添標籤
+    rotated_img = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+    cv2.putText(rotated_img, f'{gender}, {age}', (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 2.0, (224, 224, 224), 5, cv2.LINE_AA)
+    frame = cv2.rotate(rotated_img, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-                    # 計算缺陷深度
-                    a = np.sqrt((end[0] - start[0])**2 + (end[1] - start[1])**2)
-                    b = np.sqrt((far[0] - start[0])**2 + (far[1] - start[1])**2)
-                    c = np.sqrt((end[0] - far[0])**2 + (end[1] - far[1])**2)
-                    angle = np.arccos((b**2 + c**2 - a**2) / (2*b*c)) * 57
-
-                    # 過濾角度過大的缺陷
-                    if angle <= 90 and d > 2000:
-                        defect_count += 1
-                        cv2.circle(roi, far, 5, [0, 0, 255], -1)
-
-            # 根據缺陷數量判斷手勢
-            if defect_count == 0:
-                gesture = "Rock"
-            elif defect_count == 1:
-                gesture = "Scissors"
-            elif defect_count >= 2:
-                gesture = "Paper"
-
-            # 繪製輪廓和凸包
-            cv2.drawContours(roi, [max_contour], -1, (255, 0, 0), 2)
-            hull_points = cv2.convexHull(max_contour, returnPoints=True)
-            cv2.drawContours(roi, [hull_points], -1, (0, 255, 255), 2)
-
-
-    # 旋轉影像（向右旋轉 90 度）
-    rotated_img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
-
-    # 在旋轉後的影像上繪製水平文字
-    # 旋轉後尺寸為 (w, h)，文字放在左上角 (10, 50)
-    cv2.putText(rotated_img, f"Gesture: {gesture}", (y1-10, x1-50),
-                cv2.FONT_HERSHEY_SIMPLEX, 2, (127, 255, 255), 2)
-
-    img = cv2.rotate(rotated_img, cv2.ROTATE_90_COUNTERCLOCKWISE)
-    # ======================================
-
-    ok, buf = cv2.imencode(".png", img)
-    if not ok:
-        raise RuntimeError("encode failed")
-    return buf.tobytes()
-
-
-# ---------- 0. TFLite Interpreter (MobileNetV2 96×96×3) ----------
-INTER = None
-IN_IDX = OUT_IDX = None
-INPUT_SIZE = 96
-LABELS = ["Rock", "Scissors", "Paper"]
-
-def load_model(model_path):
-    global INTER, IN_IDX, OUT_IDX
-    INTER = tflite.Interpreter(model_path=model_path)
-    INTER.allocate_tensors()
-    IN_IDX = INTER.get_input_details()[0]["index"]
-    OUT_IDX = INTER.get_output_details()[0]["index"]
-    print("✅ TFLite model loaded from:", model_path)
-
-# ---------- 1. 皮膚遮罩與輪廓 ----------
-def detect_skin(image):
-    ycrcb = cv2.cvtColor(image, cv2.COLOR_BGR2YCrCb)
-    skin_mask = cv2.inRange(
-        ycrcb,
-        np.array([0, 133, 77], np.uint8),
-        np.array([255,173,127], np.uint8)
-    )
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
-    skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel)
-    skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_CLOSE, kernel)
-    return skin_mask
-
-def largest_contour(mask):
-    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    return max(cnts, key=cv2.contourArea) if cnts else None
-
-# ---------- 2. TFLite 推論 ----------
-def predict_gesture(roi_bgr):
-    roi_rgb = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2RGB)
-    roi_rgb = cv2.resize(roi_rgb, (INPUT_SIZE, INPUT_SIZE))
-    inp = np.expand_dims(roi_rgb/255.0, 0).astype(np.float32)
-    INTER.set_tensor(IN_IDX, inp)
-    INTER.invoke()
-    probs = INTER.get_tensor(OUT_IDX)[0]
-    return LABELS[int(probs.argmax())]
-
-# ---------- 3. 對 NV21 影格做整體流程 ----------
-def gesture_nv21(nv21_bytes: bytes, width: int, height: int):
-    yuv = np.frombuffer(nv21_bytes, np.uint8).reshape((height*3//2, width))
-    bgr = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV21)
-    skin = detect_skin(bgr)
-    contour = largest_contour(skin)
-    if contour is None:
-        return "No hand detected"
-    x,y,w,h = cv2.boundingRect(contour)
-    roi = bgr[y:y+h, x:x+w] # 手部 ROI
-    if roi.size == 0:
-        return "No hand detected"
-    result_gesture = predict_gesture(roi)
-    # print(result_gesture)
-
-    # 旋轉影像（向右旋轉 90 度）
-    rotated_img = cv2.rotate(bgr, cv2.ROTATE_90_CLOCKWISE)
-    # 在旋轉後的影像上繪製水平文字
-    # 旋轉後尺寸為 (w, h)，文字放在左上角 (10, 50)
-    cv2.putText(rotated_img, f"Gesture: {result_gesture}", (50, 70),
-                cv2.FONT_HERSHEY_SIMPLEX, 2, (127, 255, 255), 2)
-    img = cv2.rotate(rotated_img, cv2.ROTATE_90_COUNTERCLOCKWISE)
-
-    ok, buf = cv2.imencode(".png", img)
+    # 編碼為 PNG
+    ok, buf = cv2.imencode(".png", frame)
     if not ok:
         raise RuntimeError("encode failed")
     return buf.tobytes()

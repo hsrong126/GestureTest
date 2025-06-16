@@ -8,7 +8,7 @@ android {
     compileSdk 35
 
     defaultConfig {
-        applicationId "com.example.gesturetest"
+        applicationId "com.example.agedetect"
         minSdk 21
         targetSdk 35
         versionCode 1
@@ -25,7 +25,6 @@ android {
             pip{
                 install "numpy"
                 install "opencv-python"
-                install "tflite-runtime"
             }
         }
     }
